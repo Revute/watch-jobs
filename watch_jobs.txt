@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Watch Jobs Organizer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { 
+      font-family: Arial, sans-serif; 
+      margin: 0; 
+      padding: 0; 
+      background: #f5f5f5; 
+    }
+    h2 { text-align: center; }
+    button { margin: 10px; padding: 5px 10px; font-size: 1em; }
+
+    /* Main board scrolls horizontally */
+    .board { 
+      display: flex; 
+      flex-direction: row; 
+      padding: 10px; 
+      gap: 20px; 
+      overflow-x: auto; 
+      overflow-y: hidden; 
+      white-space: nowrap; 
+    }
+
+    .category { 
+      min-width: 300px; 
+      background: #fff; 
+      border-radius: 5px; 
+      padding: 10px; 
+      flex-shrink: 0; 
+      border: 1px solid #ccc; 
+    }
+
+    .category h3 { 
+      text-align: center; 
+      font-size: 1em; 
+      margin-top: 0; 
+    }
+
+    .job { 
+      background: #e6f3ff; 
+      margin: 10px 0; 
+      padding: 10px; 
+      border-radius: 5px; 
+      cursor: grab; 
+      min-width: 600px; /* job cards stretch horizontally */
+      display: flex; 
+      flex-direction: row; 
+      align-items: center; 
+      gap: 8px; 
+      box-sizing: border-box; 
+      border: 1px solid #b3d1ff; 
+      box-shadow: 1px 1px 5px rgba(0,0,0,0.15); 
+    }
+
+    .job input, .job select { 
+      font-size: 0.85em; 
+      box-sizing: border-box; 
+    }
+
+    .job .delete { 
+      color: red; 
+      cursor: pointer; 
+      flex-shrink: 0; 
+    }
+
+    .work-display { 
+      font-size: 0.85em; 
+      color: #333; 
+      font-weight: bold; 
+    }
+  </style>
+</head>
+<body>
+  <h2>Watch Jobs Organizer</h2>
+  <button onclick="addJob()">+ Add Job</button>
+  <div class="board" id="board"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
+  <script>
+    const categories = ["Ready", "For Polishing", "In Polishing", "Waiting Parts", "Testing", "Sent"];
+    const board = document.getElementById("board");
+
+    function saveJobs() {
+      const jobsData = {};
+      categories.forEach(cat => {
+        const catEl = document.getElementById(cat);
+        jobsData[cat] = [];
+        catEl.querySelectorAll(".job").forEach(job => {
+          const data = {
+            date: job.querySelector(".date").value,
+            brand: job.querySelector(".brand").value,
+            reference: job.querySelector(".reference").value,
+            customer: job.querySelector(".customer").value,
+            client: job.querySelector(".client").value,
+            work: Array.from(job.querySelector(".work").selectedOptions).map(o => o.value),
+            price: job.querySelector(".price").value
+          };
+          jobsData[cat].push(data);
+        });
+      });
+      localStorage.setItem("watchJobs", JSON.stringify(jobsData));
+    }
+
+    function loadJobs() {
+      const data = JSON.parse(localStorage.getItem("watchJobs") || "{}");
+      categories.forEach(cat => {
+        if (data[cat]) {
+          data[cat].forEach(job => addJob(cat, job));
+        }
+      });
+    }
+
+    function updateWorkDisplay(job) {
+      const display = job.querySelector(".work-display");
+      const selected = Array.from(job.querySelector(".work").selectedOptions).map(o => o.value).join(", ");
+      display.textContent = selected;
+    }
+
+    function createJobElement(jobData = {}) {
+      const job = document.createElement("div");
+      job.className = "job";
+      job.innerHTML = `
+        <span class="delete" onclick="deleteJob(this)">❌</span>
+        <input type="text" class="date" value="${jobData.date || new Date().toLocaleDateString()}" readonly>
+        <select class="brand">
+          <option value="">Brand</option>
+          ${["Rolex","Omega","Patek Philippe","Audemars Piguet","Jaeger-LeCoultre","TAG Heuer","Breitling","IWC","Cartier","Longines"].map(b => 
+            `<option value="${b}" ${jobData.brand===b?"selected":""}>${b}</option>`).join("")}
+        </select>
+        <input type="text" class="reference" maxlength="10" placeholder="Reference" value="${jobData.reference||""}">
+        <input type="text" class="customer" placeholder="Customer Name" value="${jobData.customer||""}">
+        <select class="client">
+          <option value="" selected>Client</option>
+          <option value="Kirsty" ${jobData.client==="Kirsty"?"selected":""}>Kirsty</option>
+          <option value="Arkin" ${jobData.client==="Arkin"?"selected":""}>Arkin</option>
+          <option value="Louise" ${jobData.client==="Louise"?"selected":""}>Louise</option>
+        </select>
+        <select class="work" multiple>
+          ${["Service","Polish","Crystal","Parts","Dial Restore","Crown repair","Partial Job"].map(w => 
+            `<option value="${w}" ${jobData.work && jobData.work.includes(w)?"selected":""}>${w}</option>`).join("")}
+        </select>
+        <div class="work-display"></div>
+        <input type="number" class="price" placeholder="Price (£)" value="${jobData.price||""}" max="1000">
+      `;
+      const workSelect = job.querySelector(".work");
+      workSelect.addEventListener("change", () => { updateWorkDisplay(job); saveJobs(); });
+      updateWorkDisplay(job);
+      job.querySelectorAll("input,select").forEach(el => {
+        if(el.className !== "work") el.addEventListener("change", saveJobs);
+      });
+      return job;
+    }
+
+    function addJob(cat="Ready", jobData={}) {
+      const catEl = document.getElementById(cat);
+      const job = createJobElement(jobData);
+      catEl.appendChild(job);
+      saveJobs();
+    }
+
+    function deleteJob(el) {
+      if (confirm("Are you sure you want to delete this job?")) {
+        el.parentElement.remove();
+        saveJobs();
+      }
+    }
+
+    // Build board
+    categories.forEach(cat => {
+      const catEl = document.createElement("div");
+      catEl.className = "category";
+      catEl.id = cat;
+      catEl.innerHTML = `<h3>${cat}</h3>`;
+      board.appendChild(catEl);
+      Sortable.create(catEl, { group: "shared", animation: 150, onSort: saveJobs });
+    });
+
+    loadJobs();
+  </script>
+</body>
+</html>
