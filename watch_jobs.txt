@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Watch Jobs Organizer</title>
+  <!-- allow more pinch-zoom -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=20.0, user-scalable=yes" />
+  <style>
+    html,body { height:100%; margin:0; padding:0; font-family: Arial, sans-serif; background:#f5f5f5; }
+    h1 { text-align:center; margin:10px 0; font-size:1.2rem; }
+    .controls { display:flex; gap:8px; align-items:center; padding:0 12px 12px; flex-wrap:wrap; }
+    button { padding:7px 10px; font-size:0.95rem; cursor:pointer; }
+    .small { padding:6px 8px; font-size:0.85rem; }
+
+    /* Whole canvas: scroll & zoom together */
+    .board {
+      display:flex;
+      flex-direction:column;
+      gap:30px;
+      padding:12px;
+      width: max-content;
+      min-width: 100%;
+      box-sizing: border-box;
+      overflow:auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* Category container (fixed in place) */
+    .category {
+      display:flex;
+      flex-direction:column;
+      background:#fff;
+      border:1px solid #ccc;
+      border-radius:6px;
+      padding:12px;
+      box-sizing:border-box;
+      min-width: 900px;
+      max-width: 1600px;
+    }
+
+    /* left aligned title placed above date area */
+    .category h2 {
+      margin:0 0 10px 6px;
+      text-align:left;
+      font-size:1rem;
+      user-select:none;
+      pointer-events:none;
+    }
+
+    /* Job cards - compact */
+    .job {
+      display:flex;
+      align-items:center;
+      gap:1px;                /* gap between fields */
+      margin:3px 0;           /* vertical gap between jobs */
+      padding:3px;            /* inner padding */
+      background:#e6f3ff;
+      border:1px solid #b3d1ff;
+      border-radius:6px;
+      box-shadow:1px 1px 5px rgba(0,0,0,0.12);
+      cursor:grab;
+      white-space:nowrap;
+      box-sizing:border-box;
+      width:100%;
+      min-width:900px;
+      flex-shrink:0;
+      -webkit-user-drag:none;
+    }
+
+    /* drag handle */
+    .drag-handle {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      width:28px;
+      height:28px;
+      border-radius:4px;
+      background:transparent;
+      color:#333;
+      font-weight:bold;
+      cursor:grab;
+      flex-shrink:0;
+      user-select:none;
+    }
+
+    .job input[type="text"], .job input[type="date"], .job select {
+      padding:4px 6px;
+      font-size:0.9rem;
+      box-sizing:border-box;
+      min-height:30px;
+      border-radius:4px;
+      border:1px solid rgba(0,0,0,0.12);
+      background:white;
+    }
+
+    .job .notes { width:220px; }
+    .job .price { width:110px; }
+    .job .reference { width:120px; }
+    .job .customer { width:160px; }
+    .job .brand { width:170px; }
+    .job .client { width:140px; }
+    .job .date { width:130px; }
+    .job .work { width:220px; }
+
+    .work-display {
+      font-size:0.85rem;
+      font-weight:700;
+      color:#222;
+      margin-left:6px;
+      max-width:260px;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+
+    .manage-btn {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      width:28px;
+      height:28px;
+      border-radius:4px;
+      background:transparent;
+      color:#333;
+      font-size:16px;
+      cursor:pointer;
+      margin-left:4px;
+      flex-shrink:0;
+    }
+
+    .delete-btn { color:#c00; cursor:pointer; padding:4px; flex-shrink:0; user-select:none; }
+
+    /* small screens tweak but keep single-line layout */
+    @media (max-width:520px) {
+      .category { min-width:700px; }
+      .job { min-width:700px; }
+      .job .brand, .job .work { width:140px; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Watch Jobs Organizer</h1>
+
+  <div class="controls">
+    <button id="addBtn">+ Add Job</button>
+    <button id="resetBtn" class="small" title="Clear all saved jobs on this device">Reset saved data</button>
+
+    <div id="jobCount" style="margin-left:8px; font-size:0.95rem; color:#333;">Active Jobs: 0</div>
+    <div style="margin-left:auto; font-size:0.9rem; color:#666;">Data saved locally on this device</div>
+  </div>
+
+  <div class="board" id="board" tabindex="0"></div>
+
+  <!-- datalists will be appended to body dynamically -->
+
+  <!-- SortableJS for drag & drop -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
+  <script>
+    // --- Keys and defaults ---
+    const STORAGE_KEY = 'watchJobs_v3';
+    const BRANDS_KEY = 'watchBrands_v3';
+    const CLIENTS_KEY = 'watchClients_v3';
+    const WORKS_KEY = 'watchWorks_v3';
+
+    const DEFAULT_CATEGORIES = ["Received","For Polishing","In Polishing","Waiting Parts","Ready For Service","Testing","Sent"];
+    const DEFAULT_BRANDS = ["Rolex","Omega","Patek Philippe","Audemars Piguet","Jaeger-LeCoultre","TAG Heuer","Breitling","IWC","Cartier","Longines"];
+    const DEFAULT_CLIENTS = []; // user will add
+    const DEFAULT_WORKS = ["Service","Polish","Crystal","Parts","Dial Restore","Crown repair","Partial Job"];
+
+    const board = document.getElementById('board');
+    const addBtn = document.getElementById('addBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const jobCountEl = document.getElementById('jobCount');
+
+    // load any saved lists or fall back to defaults
+    function loadList(key, defaults) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return defaults.slice();
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return defaults.slice();
+        return parsed;
+      } catch {
+        return defaults.slice();
+      }
+    }
+    function saveList(key, arr) {
+      localStorage.setItem(key, JSON.stringify(arr));
+    }
+
+    let brands = loadList(BRANDS_KEY, DEFAULT_BRANDS);
+    let clients = loadList(CLIENTS_KEY, DEFAULT_CLIENTS);
+    let works = loadList(WORKS_KEY, DEFAULT_WORKS);
+
+    // utility
+    function uid() { return 'j-' + Math.random().toString(36).slice(2,10); }
+
+    // Build board and categories
+    function buildBoard() {
+      board.innerHTML = '';
+      DEFAULT_CATEGORIES.forEach(catName => {
+        const cat = document.createElement('div');
+        cat.className = 'category';
+        cat.id = catName;
+        const title = document.createElement('h2');
+        title.textContent = catName;
+        cat.appendChild(title);
+        board.appendChild(cat);
+
+        // Sortable for jobs only, using drag handle
+        Sortable.create(cat, {
+          group: 'jobs',
+          animation: 150,
+          draggable: '.job',
+          handle: '.drag-handle',
+          onAdd: saveJobs,
+          onUpdate: saveJobs,
+          onRemove: saveJobs
+        });
+      });
+    }
+
+    // create or refresh datalists for brand and client
+    function createDatalists() {
+      // remove old if present
+      document.querySelectorAll('#brandList,#clientList').forEach(n => n.remove());
+      // brand datalist
+      const dB = document.createElement('datalist'); dB.id = 'brandList';
+      brands.forEach(b => { const o = document.createElement('option'); o.value = b; dB.appendChild(o); });
+      document.body.appendChild(dB);
+      // client datalist
+      const dC = document.createElement('datalist'); dC.id = 'clientList';
+      clients.forEach(c => { const o = document.createElement('option'); o.value = c; dC.appendChild(o); });
+      document.body.appendChild(dC);
+    }
+
+    // update all existing work selects to new work list, preserving selections
+    function refreshAllWorkSelects() {
+      document.querySelectorAll('.work').forEach(sel => {
+        const previously = Array.from(sel.selectedOptions).map(o => o.value);
+        // clear options
+        sel.innerHTML = '';
+        works.forEach(w => {
+          const opt = new Option(w,w);
+          if (previously.includes(w)) opt.selected = true;
+          sel.add(opt);
+        });
+        // update visible display (if exists)
+        const job = sel.closest('.job');
+        if (job) updateWorkDisplay(job);
+      });
+    }
+
+    // create job DOM element from data
+    function createJobElement(data = {}) {
+      const job = document.createElement('div');
+      job.className = 'job';
+      job.dataset.id = data.id || uid();
+
+      // drag handle
+      const handle = document.createElement('div');
+      handle.className = 'drag-handle';
+      handle.title = 'Drag job';
+      handle.textContent = '≡';
+
+      // date
+      const date = document.createElement('input');
+      date.type = 'date'; date.className = 'date';
+      date.value = data.date || new Date().toISOString().split('T')[0];
+      date.addEventListener('change', saveJobs);
+
+      // client (editable input with datalist) + manage button
+      const client = document.createElement('input');
+      client.type = 'text'; client.className = 'client';
+      client.setAttribute('list','clientList'); client.placeholder = 'Client';
+      client.value = data.client || '';
+      client.addEventListener('change', saveJobs);
+
+      const clientManageBtn = document.createElement('button');
+      clientManageBtn.className = 'manage-btn';
+      clientManageBtn.title = 'Manage Clients';
+      clientManageBtn.textContent = '⚙';
+      clientManageBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        manageClientsInline();
+      });
+
+      // brand (editable input with datalist) + manage button
+      const brand = document.createElement('input');
+      brand.type = 'text'; brand.className = 'brand';
+      brand.setAttribute('list','brandList'); brand.placeholder = 'Brand';
+      brand.value = data.brand || '';
+      brand.addEventListener('change', saveJobs);
+
+      const brandManageBtn = document.createElement('button');
+      brandManageBtn.className = 'manage-btn';
+      brandManageBtn.title = 'Manage Brands';
+      brandManageBtn.textContent = '⚙';
+      brandManageBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        manageBrandsInline();
+      });
+
+      // reference
+      const reference = document.createElement('input');
+      reference.type = 'text'; reference.className = 'reference';
+      reference.maxLength = 10; reference.placeholder = 'Reference';
+      reference.value = data.reference || '';
+      reference.addEventListener('input', saveJobs);
+
+      // customer
+      const customer = document.createElement('input');
+      customer.type = 'text'; customer.className = 'customer';
+      customer.placeholder = 'Customer Name'; customer.value = data.customer || '';
+      customer.addEventListener('input', saveJobs);
+
+      // work multi-select + manage button + display
+      const work = document.createElement('select');
+      work.className = 'work'; work.multiple = true;
+      works.forEach(w => {
+        const opt = new Option(w,w);
+        if (data.work && data.work.includes(w)) opt.selected = true;
+        work.add(opt);
+      });
+      work.addEventListener('change', () => {
+        updateWorkDisplay(job);
+        saveJobs();
+      });
+      const workManageBtn = document.createElement('button');
+      workManageBtn.className = 'manage-btn';
+      workManageBtn.title = 'Manage Work options';
+      workManageBtn.textContent = '⚙';
+      workManageBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        manageWorksInline();
+      });
+      const workDisplay = document.createElement('div');
+      workDisplay.className = 'work-display';
+      workDisplay.textContent = (data.work && data.work.length) ? data.work.join(', ') : '';
+
+      // price
+      const price = document.createElement('input');
+      price.type = 'text'; price.className = 'price';
+      price.placeholder = '£0.00'; price.value = data.price || '';
+      price.addEventListener('input', () => {
+        let val = price.value.replace(/[^0-9.]/g,'');
+        const parts = val.split('.');
+        if (parts.length>2) { val = parts.shift() + '.' + parts.join(''); }
+        price.value = val ? '£' + val : '';
+        saveJobs();
+      });
+
+      // notes
+      const notes = document.createElement('input');
+      notes.type = 'text'; notes.className = 'notes';
+      notes.placeholder = 'Notes'; notes.value = data.notes || '';
+      notes.addEventListener('input', saveJobs);
+
+      // delete
+      const del = document.createElement('span');
+      del.className = 'delete-btn'; del.textContent = '✖'; del.title = 'Delete';
+      del.addEventListener('click', () => {
+        if (!confirm('Delete this job?')) return;
+        job.remove(); saveJobs();
+      });
+
+      // assemble: handle, date, client+manage, brand+manage, reference, customer, work+manage+display, price, notes, delete
+      job.append(handle, date, client, clientManageBtn, brand, brandManageBtn, reference, customer, work, workManageBtn, workDisplay, price, notes, del);
+
+      return job;
+    }
+
+    // Update visible work display for a job
+    function updateWorkDisplay(job) {
+      const sel = job.querySelector('.work');
+      const disp = job.querySelector('.work-display');
+      if (!sel || !disp) return;
+      const vals = Array.from(sel.selectedOptions).map(o => o.value);
+      disp.textContent = vals.join(', ');
+    }
+
+    // Save all jobs to storage
+    function saveJobs() {
+      const obj = {};
+      DEFAULT_CATEGORIES.forEach(cat => {
+        const container = document.getElementById(cat);
+        obj[cat] = [];
+        if (!container) return;
+        container.querySelectorAll('.job').forEach(job => {
+          obj[cat].push({
+            id: job.dataset.id,
+            date: job.querySelector('.date').value,
+            client: job.querySelector('.client').value,
+            brand: job.querySelector('.brand').value,
+            reference: job.querySelector('.reference').value,
+            customer: job.querySelector('.customer').value,
+            work: Array.from(job.querySelector('.work').selectedOptions).map(o => o.value),
+            price: job.querySelector('.price').value,
+            notes: job.querySelector('.notes').value
+          });
+        });
+      });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+      // persist lists as well
+      saveList(BRANDS_KEY, brands);
+      saveList(CLIENTS_KEY, clients);
+      saveList(WORKS_KEY, works);
+      updateJobCount();
+    }
+
+    // Load board and jobs from storage
+    function loadAll() {
+      createDatalists();
+      buildBoard();
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) { updateJobCount(); return; }
+        const parsed = JSON.parse(raw);
+        DEFAULT_CATEGORIES.forEach(cat => {
+          const list = parsed[cat] || [];
+          const container = document.getElementById(cat);
+          list.forEach(jobData => {
+            const el = createJobElement(jobData);
+            if (jobData.id) el.dataset.id = jobData.id;
+            container.appendChild(el);
+            updateWorkDisplay(el);
+          });
+        });
+      } catch (e) {
+        console.error('Failed load jobs', e);
+      }
+      updateJobCount();
+    }
+
+    // Add job default to Received
+    function addJob(defaultCat = 'Received', data = {}) {
+      const container = document.getElementById(defaultCat);
+      if (!container) return;
+      const jobEl = createJobElement(data);
+      container.appendChild(jobEl);
+      createDatalists(); // ensure datalist exists for inputs
+      saveJobs();
+      setTimeout(()=>jobEl.scrollIntoView({behavior:'smooth', block:'center', inline:'nearest'}), 150);
+      return jobEl;
+    }
+
+    // Update active job counter (exclude Sent)
+    function updateJobCount() {
+      const total = document.querySelectorAll('.job').length;
+      const sent = document.querySelectorAll('#Sent .job').length;
+      const active = total - sent;
+      jobCountEl.textContent = 'Active Jobs: ' + active;
+    }
+
+    // Inline managers (prompt-based) invoked from job controls
+    function manageBrandsInline() {
+      const current = brands.join(', ');
+      const input = prompt('Edit brands (comma separated). Existing brands will be replaced:', current);
+      if (input === null) return;
+      const arr = input.split(',').map(s=>s.trim()).filter(Boolean);
+      brands = Array.from(new Set(arr));
+      saveList(BRANDS_KEY, brands);
+      createDatalists();
+      // existing brand input values kept; datalist updated
+      saveJobs();
+    }
+
+    function manageClientsInline() {
+      const current = clients.join(', ');
+      const input = prompt('Edit clients (comma separated). Existing clients will be replaced:', current);
+      if (input === null) return;
+      const arr = input.split(',').map(s=>s.trim()).filter(Boolean);
+      clients = Array.from(new Set(arr));
+      saveList(CLIENTS_KEY, clients);
+      createDatalists();
+      saveJobs();
+    }
+
+    function manageWorksInline() {
+      const current = works.join(', ');
+      const input = prompt('Edit work options (comma separated). Existing options will be replaced:', current);
+      if (input === null) return;
+      const arr = input.split(',').map(s=>s.trim()).filter(Boolean);
+      works = Array.from(new Set(arr));
+      saveList(WORKS_KEY, works);
+      refreshAllWorkSelects();
+      saveJobs();
+    }
+
+    // create datalists for brand/client inputs
+    function createDatalists() {
+      document.querySelectorAll('#brandList,#clientList').forEach(n => n.remove());
+      const dB = document.createElement('datalist'); dB.id = 'brandList';
+      brands.forEach(b => { const o = document.createElement('option'); o.value = b; dB.appendChild(o); });
+      document.body.appendChild(dB);
+      const dC = document.createElement('datalist'); dC.id = 'clientList';
+      clients.forEach(c => { const o = document.createElement('option'); o.value = c; dC.appendChild(o); });
+      document.body.appendChild(dC);
+    }
+
+    // refresh existing work selects after works list changed
+    function refreshAllWorkSelects() {
+      document.querySelectorAll('.work').forEach(sel => {
+        const previously = Array.from(sel.selectedOptions).map(o => o.value);
+        sel.innerHTML = '';
+        works.forEach(w => {
+          const opt = new Option(w,w);
+          if (previously.includes(w)) opt.selected = true;
+          sel.add(opt);
+        });
+        const job = sel.closest('.job');
+        if (job) updateWorkDisplay(job);
+      });
+    }
+
+    // reset saved data button
+    resetBtn.addEventListener('click', () => {
+      if (!confirm('This will clear all saved jobs from this device. Continue?')) return;
+      localStorage.removeItem(STORAGE_KEY);
+      // keep lists (brands/clients/works) as user changed them
+      buildBoard();
+      updateJobCount();
+      alert('Saved jobs cleared.');
+    });
+
+    // add job button
+    addBtn.addEventListener('click', () => addJob('Received', {}));
+
+    // keyboard pan support for board
+    board.addEventListener('keydown', e => {
+      const step = 100;
+      if (e.key === 'ArrowLeft') board.scrollLeft -= step;
+      if (e.key === 'ArrowRight') board.scrollLeft += step;
+      if (e.key === 'ArrowUp') board.scrollTop -= step;
+      if (e.key === 'ArrowDown') board.scrollTop += step;
+    });
+
+    // auto-save guard
+    setInterval(saveJobs, 5000);
+
+    // init lists and load everything
+    brands = loadList(BRANDS_KEY, DEFAULT_BRANDS);
+    clients = loadList(CLIENTS_KEY, DEFAULT_CLIENTS);
+    works = loadList(WORKS_KEY, DEFAULT_WORKS);
+    createDatalists();
+    loadAll();
+  </script>
+</body>
+</html>
