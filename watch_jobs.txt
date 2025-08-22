@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Watch Jobs</title>
+  <style>
+    html,body {
+      height:100%;
+      margin:0;
+      padding:0;
+      font-family: Arial, sans-serif;
+      background:#f5f5f5;
+      overflow:auto;              /* allow scroll */
+      touch-action: manipulation; /* smoother pinch zoom */
+    }
+    h2 { text-align:center; margin:12px 0; }
+    .controls { display:flex; gap:10px; padding:0 12px 12px; align-items:center; }
+    button { padding:8px 12px; font-size:1rem; cursor:pointer; }
+
+    /* Entire canvas */
+    .board {
+      display:flex;
+      flex-direction:column;       
+      gap:30px;
+      padding:12px;
+      width: max-content;
+      min-width: 100%;
+      box-sizing: border-box;
+      overflow:auto;
+      -webkit-overflow-scrolling: touch;
+      zoom: 0.85; /* allow more zoomed out view */
+    }
+
+    /* Category container (fixed) */
+    .category {
+      display:flex;
+      flex-direction:column;
+      background:#fff;
+      border:1px solid #ccc;
+      border-radius:6px;
+      padding:12px;
+      box-sizing:border-box;
+      min-width: 900px;
+      max-width: 1600px;
+    }
+
+    /* Category title */
+    .category h3 {
+      margin:0 0 10px 6px;        
+      text-align:left;
+      font-size:1rem;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    /* Job cards */
+    .job {
+      display:flex;
+      align-items:center;
+      gap:1px;                /* your preference */
+      margin:3px 0;           /* your preference */
+      padding:3px;            /* your preference */
+      background:#e6f3ff;
+      border:1px solid #b3d1ff;
+      border-radius:6px;
+      box-shadow:1px 1px 6px rgba(0,0,0,0.12);
+      cursor:grab;
+      white-space:nowrap;
+      box-sizing:border-box;
+      width:100%;
+      min-width:950px;
+      flex-shrink:0;
+      -webkit-user-drag: none;
+    }
+
+    .job span { font-size:0.85rem; }
+    .job input, .job select {
+      padding:2px 4px;
+      font-size:0.85rem;
+    }
+    .delete-btn { color:red; cursor:pointer; margin-left:6px; font-weight:bold; }
+  </style>
+</head>
+<body>
+  <h2>Watch Jobs</h2>
+  <div class="controls">
+    <button onclick="addJob()">+ Add Job</button>
+    <span id="jobCount">Active Jobs: 0</span>
+  </div>
+
+  <div class="board" id="board">
+    <div class="category" data-category="Received">
+      <h3>Received</h3>
+    </div>
+    <div class="category" data-category="For Polishing">
+      <h3>For Polishing</h3>
+    </div>
+    <div class="category" data-category="In Polishing">
+      <h3>In Polishing</h3>
+    </div>
+    <div class="category" data-category="Waiting Parts">
+      <h3>Waiting Parts</h3>
+    </div>
+    <div class="category" data-category="Testing">
+      <h3>Testing</h3>
+    </div>
+    <div class="category" data-category="Sent">
+      <h3>Sent</h3>
+    </div>
+  </div>
+
+  <script>
+    const brands = ["Rolex","Omega","Tag Heuer","Breitling","Patek Philippe","Audemars Piguet","Jaeger-LeCoultre","IWC","Cartier","Tudor"];
+    const clients = ["Kirsty","Arkin","Louise"];
+    const workTypes = ["Service","Polish","Crystal","Parts","Dial Restore","Crown repair","Partial Job"];
+
+    function addJob() {
+      const job = document.createElement("div");
+      job.className = "job";
+      job.draggable = true;
+
+      // Editable date
+      const date = document.createElement("input");
+      date.type = "date";
+      const today = new Date().toISOString().split('T')[0];
+      date.value = today;
+
+      // Client dropdown (placeholder first)
+      const client = document.createElement("select");
+      const clientPlaceholder = new Option("Client","",true,true);
+      clientPlaceholder.disabled = true;
+      client.add(clientPlaceholder);
+      clients.forEach(c => client.add(new Option(c,c)));
+
+      // Brand dropdown
+      const brand = document.createElement("select");
+      brands.forEach(b => brand.add(new Option(b,b)));
+
+      // Reference input
+      const reference = document.createElement("input");
+      reference.type = "text";
+      reference.maxLength = 10;
+      reference.placeholder = "Ref";
+
+      // Customer Name input
+      const customer = document.createElement("input");
+      customer.type = "text";
+      customer.placeholder = "Customer";
+
+      // Work multi-select
+      const work = document.createElement("select");
+      work.multiple = true;
+      workTypes.forEach(w => work.add(new Option(w,w)));
+      work.size = 3; 
+      work.addEventListener("change", () => {
+        const selected = Array.from(work.selectedOptions).map(o=>o.value);
+        work.title = selected.join(", ");
+      });
+
+      // Price input with £ prefix
+      const price = document.createElement("input");
+      price.type = "text";
+      price.placeholder = "£0.00";
+      price.addEventListener("input", () => {
+        if (!price.value.startsWith("£")) {
+          price.value = "£" + price.value.replace(/£/g,"");
+        }
+      });
+
+      // Notes input
+      const notes = document.createElement("input");
+      notes.type = "text";
+      notes.placeholder = "Notes";
+
+      // Delete button
+      const del = document.createElement("span");
+      del.textContent = "✖";
+      del.className = "delete-btn";
+      del.onclick = () => {
+        if (confirm("Delete this job?")) {
+          job.remove();
+          updateJobCount();
+        }
+      };
+
+      // Order: Date → Client → Brand → Reference → Customer → Work → Price → Notes → Delete
+      job.append(date, client, brand, reference, customer, work, price, notes, del);
+
+      document.querySelector('[data-category="Received"]').appendChild(job);
+      updateJobCount();
+    }
+
+    // Drag & Drop for jobs only
+    document.addEventListener("dragstart", e => {
+      if (e.target.classList.contains("job")) {
+        e.dataTransfer.setData("text/plain", e.target.id || Math.random().toString());
+        e.target.dataset.dragging = "true";
+      }
+    });
+    document.addEventListener("dragend", e => {
+      if (e.target.classList.contains("job")) {
+        e.target.dataset.dragging = "false";
+      }
+    });
+    document.querySelectorAll(".category").forEach(cat => {
+      cat.addEventListener("dragover", e => {
+        e.preventDefault();
+        const dragging = document.querySelector(".job[data-dragging='true']");
+        if (dragging) cat.appendChild(dragging);
+      });
+      cat.addEventListener("drop", () => updateJobCount());
+    });
+
+    // Job counter
+    function updateJobCount() {
+      const total = document.querySelectorAll(".job").length;
+      const sent = document.querySelectorAll('.category[data-category="Sent"] .job').length;
+      const active = total - sent;
+      document.getElementById("jobCount").textContent = "Active Jobs: " + active;
+    }
+  </script>
+</body>
+</html>
