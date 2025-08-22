@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Watch Jobs Organizer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=10.0, user-scalable=yes" />
+  <style>
+    html,body { height:100%; margin:0; padding:0; font-family: Arial, sans-serif; background:#f5f5f5; }
+    h1 { text-align:center; margin:10px 0; font-size:1.25rem; }
+    .controls { display:flex; gap:10px; align-items:center; padding:0 12px 12px; }
+    button { padding:8px 12px; font-size:1rem; cursor:pointer; }
+
+    /* Whole canvas: scroll & zoom together */
+    .board {
+      display:flex;
+      flex-direction:column;         /* categories stacked vertically */
+      gap:30px;
+      padding:12px;
+      width: max-content;            /* allow wide content to be panned/zoomed */
+      min-width: 100%;
+      box-sizing: border-box;
+      overflow:auto;                 /* pan both directions */
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* Category container (fixed in place) */
+    .category {
+      display:flex;
+      flex-direction:column;
+      background:#fff;
+      border:1px solid #ccc;
+      border-radius:6px;
+      padding:12px;
+      box-sizing:border-box;
+      min-width: 900px;              /* wide enough for full job line */
+      max-width: 1600px;
+    }
+
+    /* Title left aligned and placed above the date field area */
+    .category h2 {
+      margin:0 0 10px 6px;
+      text-align:left;
+      font-size:1rem;
+      user-select:none;
+      pointer-events:none;            /* prevents it being dragged/selected */
+    }
+
+    /* Jobs: compact spacing per your preferences */
+    .job {
+      display:flex;
+      align-items:center;
+      gap:1px;                     /* your chosen gap */
+      margin:3px 0;                /* vertical spacing between jobs */
+      padding:3px;                 /* inner padding */
+      background:#e6f3ff;
+      border:1px solid #b3d1ff;
+      border-radius:6px;
+      box-shadow:1px 1px 5px rgba(0,0,0,0.12);
+      cursor:grab;
+      white-space:nowrap;          /* single-line layout */
+      box-sizing:border-box;
+      width:100%;
+      min-width:900px;             /* ensure job fields visible */
+      flex-shrink:0;
+      -webkit-user-drag:none;
+    }
+
+    .job input[type="text"], .job input[type="date"], .job input[type="number"], .job select {
+      padding:4px 6px;
+      font-size:0.9rem;
+      box-sizing:border-box;
+      min-height:30px;
+    }
+
+    .job .notes { width:220px; }      /* notes box width */
+    .job .price { width:110px; }      /* price width */
+    .job .reference { width:120px; }
+    .job .customer { width:160px; }
+    .job .brand { width:160px; }
+    .job .client { width:120px; }
+    .job .date { width:130px; }
+    .job .work { width:220px; }
+
+    .delete-btn { color:#c00; cursor:pointer; padding:4px; flex-shrink:0; user-select:none; }
+
+    /* small screens tweak but keep single-line layout */
+    @media (max-width:520px) {
+      .category { min-width:700px; }
+      .job { min-width:700px; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Watch Jobs Organizer</h1>
+
+  <div class="controls">
+    <button id="addBtn">+ Add Job</button>
+    <button id="resetBtn" title="Clear all saved jobs on this device">Reset saved data</button>
+    <div id="jobCount" style="font-size:0.95rem; color:#333;">Active Jobs: 0</div>
+    <div style="margin-left:auto; font-size:0.9rem; color:#666;">Data saved locally on this device</div>
+  </div>
+
+  <div class="board" id="board" tabindex="0"></div>
+
+  <!-- SortableJS for drag & drop -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
+  <script>
+    // --- Configuration ---
+    const STORAGE_KEY = 'watchJobs'; // localStorage key
+    const categories = ["Received","For Polishing","In Polishing","Waiting Parts","Ready For Service","Testing","Sent"];
+    const brands = ["Rolex","Omega","Patek Philippe","Audemars Piguet","Jaeger-LeCoultre","TAG Heuer","Breitling","IWC","Cartier","Longines"];
+    const clients = ["Kirsty","Arkin","Louise"];
+    const works = ["Service","Polish","Crystal","Parts","Dial Restore","Crown repair","Partial Job"];
+
+    // --- Elements ---
+    const board = document.getElementById('board');
+    const addBtn = document.getElementById('addBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const jobCountEl = document.getElementById('jobCount');
+
+    // --- Utilities ---
+    function uid() { return 'j-' + Math.random().toString(36).slice(2,10); }
+
+    // Save current DOM jobs into localStorage
+    function saveJobs() {
+      const data = {};
+      categories.forEach(cat => {
+        const el = document.getElementById(cat);
+        data[cat] = [];
+        el.querySelectorAll('.job').forEach(job => {
+          data[cat].push({
+            id: job.dataset.id || null,
+            date: job.querySelector('.date').value,
+            client: job.querySelector('.client').value,
+            brand: job.querySelector('.brand').value,
+            reference: job.querySelector('.reference').value,
+            customer: job.querySelector('.customer').value,
+            work: Array.from(job.querySelector('.work').selectedOptions).map(o => o.value),
+            price: job.querySelector('.price').value,
+            notes: job.querySelector('.notes').value
+          });
+        });
+      });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      updateJobCount();
+    }
+
+    // Create job DOM element from data
+    function createJobElement(data = {}) {
+      const job = document.createElement('div');
+      job.className = 'job';
+      job.dataset.id = data.id || uid();
+
+      // date (editable)
+      const date = document.createElement('input');
+      date.type = 'date';
+      date.className = 'date';
+      date.value = data.date || new Date().toISOString().split('T')[0];
+      date.addEventListener('change', saveJobs);
+
+      // client select (placeholder "Client")
+      const client = document.createElement('select');
+      client.className = 'client';
+      const clientPlaceholder = new Option('Client','');
+      clientPlaceholder.disabled = true;
+      clientPlaceholder.selected = !data.client;
+      client.add(clientPlaceholder);
+      clients.forEach(c => {
+        const opt = new Option(c,c);
+        if (data.client === c) opt.selected = true;
+        client.add(opt);
+      });
+      client.addEventListener('change', saveJobs);
+
+      // brand select
+      const brand = document.createElement('select');
+      brand.className = 'brand';
+      const brandPlaceholder = new Option('','');
+      brand.add(brandPlaceholder);
+      brands.forEach(b => {
+        const opt = new Option(b,b);
+        if (data.brand === b) opt.selected = true;
+        brand.add(opt);
+      });
+      brand.addEventListener('change', saveJobs);
+
+      // reference input
+      const reference = document.createElement('input');
+      reference.type = 'text';
+      reference.className = 'reference';
+      reference.maxLength = 10;
+      reference.placeholder = 'Reference';
+      reference.value = data.reference || '';
+      reference.addEventListener('input', saveJobs);
+
+      // customer input
+      const customer = document.createElement('input');
+      customer.type = 'text';
+      customer.className = 'customer';
+      customer.placeholder = 'Customer Name';
+      customer.value = data.customer || '';
+      customer.addEventListener('input', saveJobs);
+
+      // work multi-select
+      const work = document.createElement('select');
+      work.className = 'work';
+      work.multiple = true;
+      works.forEach(w => {
+        const opt = new Option(w,w);
+        if (data.work && data.work.includes(w)) opt.selected = true;
+        work.add(opt);
+      });
+      // show selected items as title for visibility and save on change
+      work.addEventListener('change', () => {
+        work.title = Array.from(work.selectedOptions).map(o => o.value).join(', ');
+        saveJobs();
+      });
+      // initialize title
+      work.title = Array.from(work.selectedOptions).map(o => o.value).join(', ');
+
+      // price input with £ prefix handling
+      const price = document.createElement('input');
+      price.type = 'text';
+      price.className = 'price';
+      price.placeholder = '£0.00';
+      price.value = data.price || '';
+      // ensure stored value includes £; on user input, maintain £ prefix and allow numbers+dot
+      price.addEventListener('input', () => {
+        // strip all chars except digits and dot
+        let val = price.value.replace(/[^0-9.]/g,'');
+        // if multiple dots, keep first and remove others
+        const parts = val.split('.');
+        if (parts.length>2) { val = parts.shift() + '.' + parts.join(''); }
+        // optionally format to two decimals? keep raw for now
+        if (val !== '') price.value = '£' + val;
+        else price.value = '';
+        saveJobs();
+      });
+
+      // notes input (text)
+      const notes = document.createElement('input');
+      notes.type = 'text';
+      notes.className = 'notes';
+      notes.placeholder = 'Notes';
+      notes.value = data.notes || '';
+      notes.addEventListener('input', saveJobs);
+
+      // delete button
+      const del = document.createElement('span');
+      del.className = 'delete-btn';
+      del.textContent = '✖';
+      del.title = 'Delete job';
+      del.addEventListener('click', () => {
+        if (!confirm('Delete this job?')) return;
+        job.remove();
+        saveJobs();
+      });
+
+      // assemble order: Date → Client → Brand → Reference → Customer → Work → Price → Notes → Delete
+      job.append(date, client, brand, reference, customer, work, price, notes, del);
+
+      return job;
+    }
+
+    // Build categories and attach Sortable to allow only .job draggable
+    function buildCategories() {
+      // clear board
+      board.innerHTML = '';
+      categories.forEach(catName => {
+        const cat = document.createElement('div');
+        cat.className = 'category';
+        cat.id = catName;
+        const title = document.createElement('h2');
+        title.textContent = catName;
+        cat.appendChild(title);
+        board.appendChild(cat);
+
+        // enable Sortable for jobs only (categories themselves are fixed)
+        Sortable.create(cat, {
+          group: 'shared',
+          animation: 150,
+          draggable: '.job',   // only .job are draggable
+          handle: undefined,
+          onAdd: saveJobs,
+          onUpdate: saveJobs,
+          onRemove: saveJobs
+        });
+      });
+    }
+
+    // load saved jobs (if any)
+    function loadJobs() {
+      buildCategories();
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) { updateJobCount(); return; }
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {
+        console.error('Failed to parse saved jobs', e);
+        updateJobCount();
+        return;
+      }
+      // If parsed missing a category, ignore
+      categories.forEach(cat => {
+        const list = parsed[cat] || [];
+        const container = document.getElementById(cat);
+        list.forEach(jobData => {
+          // jobData may come from older format; keep safe defaults
+          const jobEl = createJobElement(jobData || {});
+          // set id if available
+          if (jobData && jobData.id) jobEl.dataset.id = jobData.id;
+          container.appendChild(jobEl);
+        });
+      });
+      updateJobCount();
+    }
+
+    // Add job to Received by default
+    function addJob(defaultCat = 'Received', data = {}) {
+      const el = document.getElementById(defaultCat);
+      if (!el) return;
+      const jobEl = createJobElement(data);
+      el.appendChild(jobEl);
+      saveJobs();
+      // scroll newly created job into view a little
+      setTimeout(() => jobEl.scrollIntoView({behavior:'smooth', block:'center', inline:'nearest'}), 100);
+      return jobEl;
+    }
+
+    // job counter (exclude Sent)
+    function updateJobCount() {
+      const total = document.querySelectorAll('.job').length;
+      const sent = document.querySelectorAll('#Sent .job').length;
+      const active = total - sent;
+      jobCountEl.textContent = 'Active Jobs: ' + active;
+    }
+
+    // Reset saved data
+    resetBtn.addEventListener('click', () => {
+      if (!confirm('This will clear all saved jobs from this device. Continue?')) return;
+      localStorage.removeItem(STORAGE_KEY);
+      // rebuild empty categories
+      buildCategories();
+      updateJobCount();
+      alert('Saved jobs cleared.');
+    });
+
+    // add button
+    addBtn.addEventListener('click', () => addJob('Received', {}));
+
+    // expose save when user uses keyboard arrow keys to pan
+    document.getElementById('board').addEventListener('keydown', e => {
+      const step = 100;
+      if (e.key === 'ArrowLeft') board.scrollLeft -= step;
+      if (e.key === 'ArrowRight') board.scrollLeft += step;
+      if (e.key === 'ArrowUp') board.scrollTop -= step;
+      if (e.key === 'ArrowDown') board.scrollTop += step;
+    });
+
+    // Initialize on load
+    loadJobs();
+
+    // Add a small guard: save periodically (in case of odd browsers)
+    setInterval(saveJobs, 5000);
+  </script>
+</body>
+</html>
